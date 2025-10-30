@@ -74,6 +74,16 @@ uv run ruff format .
 uv run ruff check .
 ```
 
+## GitHub Pages Deployment
+
+This project automatically deploys to GitHub Pages via GitHub Actions. The workflow:
+- Runs daily on a schedule
+- Fetches fresh flight data from the API
+- Generates static HTML pages
+- Deploys to GitHub Pages
+
+The site is available at: `https://ayys.github.io/flight-stat/`
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) file for details.
