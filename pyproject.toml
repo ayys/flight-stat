@@ -30,6 +30,7 @@ dependencies = [
     "httpx",
     "rich",
     "jinja2",
+    "tqdm",
 ]
 
 [project.optional-dependencies]

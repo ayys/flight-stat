@@ -13,6 +13,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import httpx
 import requests
+from tqdm.asyncio import tqdm as atqdm
 from zoneinfo import ZoneInfo
 
 # Nepal timezone (UTC+5:45)
@@ -309,13 +310,15 @@ async def fetch_all_combinations_async(
     conn,
     max_concurrent: int = 10,
     progress_callback: Optional[Callable[[str], None]] = None,
+    use_tqdm: bool = True,
 ) -> Tuple[int, int, int]:
     """Fetch flight status for all airport combinations asynchronously.
 
     Args:
         conn: Database connection
         max_concurrent: Maximum number of concurrent requests
-        progress_callback: Optional callback function for progress messages
+        progress_callback: Optional callback function for progress messages (used if use_tqdm=False)
+        use_tqdm: Whether to use tqdm progress bar (default: True)
 
     Returns:
         Tuple of (successful_routes, failed_routes, total_flights)
@@ -336,7 +339,7 @@ async def fetch_all_combinations_async(
     ]
 
     total_combinations = len(routes)
-    if progress_callback:
+    if progress_callback and not use_tqdm:
         progress_callback(
             f"[cyan]Fetching flight status for {total_combinations} route combinations...[/cyan]\n"
         )
@@ -347,7 +350,9 @@ async def fetch_all_combinations_async(
 
     semaphore = asyncio.Semaphore(max_concurrent)
 
-    async def fetch_and_store_route(departure: str, arrival: str) -> Tuple[int, int, bool]:
+    async def fetch_and_store_route(
+        departure: str, arrival: str, pbar: Optional[atqdm] = None
+    ) -> Tuple[int, int, bool]:
         """Fetch a single route and store results."""
         async with semaphore:
             try:
@@ -356,46 +361,81 @@ async def fetch_all_combinations_async(
 
                     # Check if response is valid XML (not empty or error)
                     if not xml_content or xml_content.strip() == "":
+                        if pbar:
+                            pbar.set_postfix_str(f"{departure} → {arrival}: No data")
                         return (0, 0, False)
 
                     # Check for JSON error responses
                     if xml_content.strip().startswith("{"):
+                        if pbar:
+                            pbar.set_postfix_str(f"{departure} → {arrival}: API error")
                         return (0, 0, False)
 
                     # Parse XML
                     try:
                         flights = parse_xml(xml_content)
                     except Exception:
+                        if pbar:
+                            pbar.set_postfix_str(f"{departure} → {arrival}: Invalid XML")
                         return (0, 0, False)
 
                     if flights:
                         # Store flights (database operations are synchronous)
                         inserted, skipped = store_flights(conn, flights)
+                        if pbar:
+                            status = f"{inserted} new" if inserted > 0 else f"{skipped} skipped"
+                            pbar.set_postfix_str(f"{departure} → {arrival}: {status}")
                         return (inserted, skipped, True)
                     else:
+                        if pbar:
+                            pbar.set_postfix_str(f"{departure} → {arrival}: No flights")
                         return (0, 0, False)
 
             except Exception:
+                if pbar:
+                    pbar.set_postfix_str(f"{departure} → {arrival}: Error")
                 return (0, 0, False)
+
+    # Create progress bar
+    if use_tqdm:
+        pbar = atqdm(total=total_combinations, desc="Fetching routes", unit="route")
+    else:
+        pbar = None
 
     # Create tasks for all routes
     tasks = [
-        fetch_and_store_route(dep, arr) for dep, arr in routes
+        fetch_and_store_route(dep, arr, pbar) for dep, arr in routes
     ]
 
-    # Execute all tasks concurrently
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    # Execute all tasks concurrently with progress tracking
+    results = []
+    if use_tqdm:
+        # Wrap tasks to update progress bar
+        async def wrap_task(task):
+            result = await task
+            if pbar:
+                pbar.update(1)
+            return result
+
+        wrapped_tasks = [wrap_task(task) for task in tasks]
+        results = await asyncio.gather(*wrapped_tasks, return_exceptions=True)
+    else:
+        # Use regular gather and manual progress updates
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Close progress bar
+    if pbar:
+        pbar.close()
 
     # Process results
     for i, result in enumerate(results):
         departure, arrival = routes[i]
-        route_num = i + 1
 
         if isinstance(result, Exception):
             failed_routes += 1
-            if progress_callback:
+            if progress_callback and not use_tqdm:
                 msg = (
-                    f"[dim][{route_num}/{total_combinations}][/dim] "
+                    f"[dim][{i+1}/{total_combinations}][/dim] "
                     f"{departure} → {arrival}: [red]✗ Error[/red]"
                 )
                 progress_callback(msg)
@@ -404,9 +444,9 @@ async def fetch_all_combinations_async(
             if success:
                 successful_routes += 1
                 total_flights += inserted
-                if progress_callback:
+                if progress_callback and not use_tqdm:
                     status_msg = (
-                        f"[dim][{route_num}/{total_combinations}][/dim] "
+                        f"[dim][{i+1}/{total_combinations}][/dim] "
                         f"{departure} → {arrival}: "
                     )
                     if inserted > 0:
@@ -420,9 +460,9 @@ async def fetch_all_combinations_async(
                         )
             else:
                 failed_routes += 1
-                if progress_callback:
+                if progress_callback and not use_tqdm:
                     status_msg = (
-                        f"[dim][{route_num}/{total_combinations}][/dim] "
+                        f"[dim][{i+1}/{total_combinations}][/dim] "
                         f"{departure} → {arrival}: "
                     )
                     progress_callback(f"{status_msg}[dim]No flights[/dim]")
