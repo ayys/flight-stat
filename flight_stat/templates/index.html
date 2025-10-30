@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Buddha Air Flight Status</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            padding-top: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px 0;
+            margin-bottom: 30px;
+            border-radius: 10px;
+        }
+        .flight-card {
+            transition: transform 0.2s;
+            margin-bottom: 15px;
+        }
+        .flight-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .badge-status {
+            font-size: 0.9em;
+        }
+        .route-link {
+            text-decoration: none;
+            color: inherit;
+        }
+        .route-link:hover {
+            color: #667eea;
+        }
+        .date-selector {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .dropdown-filter {
+            position: relative;
+        }
+        .dropdown-menu {
+            max-height: 300px;
+            overflow-y: auto;
+            width: 100%;
+            display: none;
+            position: absolute;
+            top: 100%;
+            left: 0;
+            z-index: 1000;
+            margin-top: 0.125rem;
+        }
+        .dropdown-menu.show {
+            display: block;
+        }
+        .dropdown-item {
+            cursor: pointer;
+            padding: 8px 12px;
+        }
+        .dropdown-item:hover {
+            background-color: #f8f9fa;
+        }
+        .dropdown-item.active {
+            background-color: #667eea;
+            color: white;
+        }
+        .filter-input-group {
+            position: relative;
+        }
+        .clear-filter-btn {
+            position: absolute;
+            right: 5px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: #6c757d;
+            cursor: pointer;
+            padding: 0 8px;
+            z-index: 10;
+            font-size: 1.5em;
+            line-height: 1;
+        }
+        .clear-filter-btn:hover {
+            color: #495057;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header text-center">
+            <h1 class="mb-0">Buddha Air Flight Status</h1>
+            <p class="mb-0 mt-2" id="dateDisplay">Flights for {{ default_date.strftime('%B %d, %Y') }}</p>
+        </div>
+        
+        <div class="date-selector">
+            <div class="row">
+                <div class="col-md-4 mb-3 mb-md-0">
+                    <label for="datePicker" class="form-label"><strong>Select Date:</strong></label>
+                    <input type="date" id="datePicker" class="form-control" 
+                           value="{{ default_date.isoformat() }}" 
+                           min="{{ min_date.isoformat() }}" 
+                           max="{{ max_date.isoformat() }}">
+                </div>
+                <div class="col-md-4 mb-3 mb-md-0">
+                    <label for="departureFilter" class="form-label"><strong>Departure:</strong></label>
+                    <div class="dropdown-filter">
+                        <div class="filter-input-group">
+                            <input type="text" id="departureFilter" class="form-control" 
+                                   placeholder="Type to search or select..."
+                                   autocomplete="off" data-bs-toggle="dropdown" 
+                                   aria-expanded="false" aria-haspopup="true">
+                            <button type="button" class="clear-filter-btn" onclick="clearDepartureFilter()" style="display:none;" id="clearDepartureBtn">
+                                ×
+                            </button>
+                        </div>
+                        <ul class="dropdown-menu" id="departureDropdown" aria-labelledby="departureFilter">
+                            <li><a class="dropdown-item" href="#" data-value="">All Departures</a></li>
+                            {% for dep in unique_departures %}
+                            <li><a class="dropdown-item" href="#" data-value="{{ dep.name }}">{{ dep.name }} ({{ dep.code }})</a></li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <label for="arrivalFilter" class="form-label"><strong>Arrival:</strong></label>
+                    <div class="dropdown-filter">
+                        <div class="filter-input-group">
+                            <input type="text" id="arrivalFilter" class="form-control" 
+                                   placeholder="Type to search or select..."
+                                   autocomplete="off" data-bs-toggle="dropdown" 
+                                   aria-expanded="false" aria-haspopup="true">
+                            <button type="button" class="clear-filter-btn" onclick="clearArrivalFilter()" style="display:none;" id="clearArrivalBtn">
+                                ×
+                            </button>
+                        </div>
+                        <ul class="dropdown-menu" id="arrivalDropdown" aria-labelledby="arrivalFilter">
+                            <li><a class="dropdown-item" href="#" data-value="">All Arrivals</a></li>
+                            {% for arr in unique_arrivals %}
+                            <li><a class="dropdown-item" href="#" data-value="{{ arr.name }}">{{ arr.name }} ({{ arr.code }})</a></li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="row mt-2">
+                <div class="col-12">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="clearFilters()">Clear All Filters</button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-body">
+                <h2 class="card-title mb-4">All Flights</h2>
+                
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Flight No.</th>
+                                <th>Route</th>
+                                <th>Scheduled Time</th>
+                                <th>Revised Time</th>
+                                <th>Status</th>
+                                <th>Remarks</th>
+                            </tr>
+                        </thead>
+                        <tbody id="flightTableBody">
+                            {% for flight in flights %}
+                            <tr class="flight-row" data-date="{{ flight.flight_date_str }}" data-departure="{{ flight.departure }}" data-arrival="{{ flight.arrival }}">
+                                <td><a href="{{ flight.filename }}" class="route-link">{{ flight.flight_no }}</a></td>
+                                <td><a href="{{ flight.filename }}" class="route-link">{{ flight.route_display }}</a></td>
+                                <td>{{ flight.flight_time or '' }}</td>
+                                <td>{{ flight.revised_time or '' }}</td>
+                                <td>{% if flight.flight_status %}<span class="badge {{ flight.status_badge_class }} badge-status">{{ flight.flight_status }}</span>{% endif %}</td>
+                                <td>{{ flight.flight_remarks or '' }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div class="mt-4 text-muted">
+                    <p class="mb-0"><small>Click on any flight to view historical data</small></p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        function formatDate(dateString) {
+            const date = new Date(dateString + 'T00:00:00');
+            const options = { year: 'numeric', month: 'long', day: 'numeric' };
+            return date.toLocaleDateString('en-US', options);
+        }
+        
+        function updateFilters() {
+            const selectedDate = document.getElementById('datePicker').value;
+            const selectedDeparture = document.getElementById('departureFilter').value.trim().toUpperCase();
+            const selectedArrival = document.getElementById('arrivalFilter').value.trim().toUpperCase();
+            
+            const rows = document.querySelectorAll('.flight-row');
+            let hasData = false;
+            
+            rows.forEach(row => {
+                const rowDate = row.getAttribute('data-date');
+                const rowDeparture = row.getAttribute('data-departure').toUpperCase();
+                const rowArrival = row.getAttribute('data-arrival').toUpperCase();
+                
+                let match = true;
+                
+                // Date filter
+                if (selectedDate && rowDate !== selectedDate) {
+                    match = false;
+                }
+                
+                // Departure filter - supports partial matching
+                if (selectedDeparture) {
+                    if (!rowDeparture.includes(selectedDeparture)) {
+                        match = false;
+                    }
+                }
+                
+                // Arrival filter - supports partial matching
+                if (selectedArrival) {
+                    if (!rowArrival.includes(selectedArrival)) {
+                        match = false;
+                    }
+                }
+                
+                if (match) {
+                    row.style.display = '';
+                    hasData = true;
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+            
+            // Update date display
+            const dateDisplay = document.getElementById('dateDisplay');
+            let displayText = 'All Flights';
+            if (selectedDate) {
+                displayText = 'Flights for ' + formatDate(selectedDate);
+            }
+            if (selectedDeparture || selectedArrival) {
+                let routeParts = [];
+                if (selectedDeparture) {
+                    routeParts.push(selectedDeparture);
+                }
+                if (selectedArrival) {
+                    routeParts.push(selectedArrival);
+                }
+                if (routeParts.length > 0) {
+                    displayText += ' • ' + routeParts.join(' → ');
+                }
+            }
+            dateDisplay.textContent = displayText;
+            
+            // Show message if no data for selected filters
+            const tbody = document.getElementById('flightTableBody');
+            let noDataRow = document.getElementById('noDataRow');
+            if (!hasData) {
+                if (!noDataRow) {
+                    noDataRow = document.createElement('tr');
+                    noDataRow.id = 'noDataRow';
+                    noDataRow.innerHTML = '<td colspan="6" class="text-center text-muted">No flights available for selected filters</td>';
+                    tbody.appendChild(noDataRow);
+                }
+            } else {
+                if (noDataRow) {
+                    noDataRow.remove();
+                }
+            }
+        }
+        
+        function updateURL() {
+            const selectedDate = document.getElementById('datePicker').value;
+            const selectedDeparture = document.getElementById('departureFilter').value;
+            const selectedArrival = document.getElementById('arrivalFilter').value;
+            
+            const url = new URL(window.location.href);
+            
+            if (selectedDate) {
+                url.searchParams.set('date', selectedDate);
+            } else {
+                url.searchParams.delete('date');
+            }
+            
+            if (selectedDeparture) {
+                url.searchParams.set('departure', selectedDeparture);
+            } else {
+                url.searchParams.delete('departure');
+            }
+            
+            if (selectedArrival) {
+                url.searchParams.set('arrival', selectedArrival);
+            } else {
+                url.searchParams.delete('arrival');
+            }
+            
+            window.history.pushState({}, '', url.toString());
+        }
+        
+        // Handle date picker change
+        document.getElementById('datePicker').addEventListener('change', function() {
+            updateURL();
+            updateFilters();
+        });
+        
+        // Setup dropdown filtering for departure
+        setupDropdownFilter('departureFilter', 'departureDropdown', 'clearDepartureBtn');
+        
+        // Setup dropdown filtering for arrival
+        setupDropdownFilter('arrivalFilter', 'arrivalDropdown', 'clearArrivalBtn');
+        
+        function setupDropdownFilter(inputId, dropdownId, clearBtnId) {
+            const input = document.getElementById(inputId);
+            const dropdown = document.getElementById(dropdownId);
+            const clearBtn = document.getElementById(clearBtnId);
+            const items = dropdown.querySelectorAll('.dropdown-item');
+            
+            function showDropdown() {
+                dropdown.style.display = 'block';
+                dropdown.classList.add('show');
+            }
+            
+            function hideDropdown() {
+                dropdown.style.display = 'none';
+                dropdown.classList.remove('show');
+            }
+            
+            function filterItems(searchTerm) {
+                searchTerm = searchTerm.toUpperCase();
+                items.forEach(item => {
+                    const text = item.textContent.toUpperCase();
+                    if (text.includes(searchTerm) || searchTerm === '') {
+                        item.style.display = '';
+                    } else {
+                        item.style.display = 'none';
+                    }
+                });
+            }
+            
+            // Filter dropdown items as user types
+            input.addEventListener('input', function() {
+                const searchTerm = this.value;
+                filterItems(searchTerm);
+                
+                // Show/hide clear button
+                if (searchTerm.trim() !== '') {
+                    clearBtn.style.display = 'block';
+                    showDropdown();
+                } else {
+                    clearBtn.style.display = 'none';
+                    showDropdown(); // Show all options when empty
+                }
+                
+                // Update filters
+                updateURL();
+                updateFilters();
+            });
+            
+            // Handle item selection
+            items.forEach(item => {
+                item.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const value = this.getAttribute('data-value');
+                    input.value = value;
+                    clearBtn.style.display = value ? 'block' : 'none';
+                    
+                    // Close dropdown
+                    hideDropdown();
+                    
+                    updateURL();
+                    updateFilters();
+                });
+            });
+            
+            // Handle focus - show dropdown
+            input.addEventListener('focus', function() {
+                filterItems(this.value);
+                showDropdown();
+            });
+            
+            // Keep dropdown open when clicking inside
+            dropdown.addEventListener('click', function(e) {
+                e.stopPropagation();
+            });
+            
+            // Close dropdown when clicking outside
+            document.addEventListener('click', function(e) {
+                if (!input.contains(e.target) && !dropdown.contains(e.target) && !clearBtn.contains(e.target)) {
+                    hideDropdown();
+                }
+            });
+        }
+        
+        function clearDepartureFilter() {
+            document.getElementById('departureFilter').value = '';
+            document.getElementById('clearDepartureBtn').style.display = 'none';
+            updateURL();
+            updateFilters();
+        }
+        
+        function clearArrivalFilter() {
+            document.getElementById('arrivalFilter').value = '';
+            document.getElementById('clearArrivalBtn').style.display = 'none';
+            updateURL();
+            updateFilters();
+        }
+        
+        // Clear all filters function
+        function clearFilters() {
+            document.getElementById('datePicker').value = '';
+            clearDepartureFilter();
+            clearArrivalFilter();
+        }
+        
+        // Make functions available globally
+        window.clearFilters = clearFilters;
+        window.clearDepartureFilter = clearDepartureFilter;
+        window.clearArrivalFilter = clearArrivalFilter;
+        
+        // Handle URL parameters on page load
+        const urlParams = new URLSearchParams(window.location.search);
+        const dateParam = urlParams.get('date');
+        const departureParam = urlParams.get('departure');
+        const arrivalParam = urlParams.get('arrival');
+        
+        if (dateParam) {
+            document.getElementById('datePicker').value = dateParam;
+        }
+        if (departureParam) {
+            document.getElementById('departureFilter').value = departureParam;
+        }
+        if (arrivalParam) {
+            document.getElementById('arrivalFilter').value = arrivalParam;
+        }
+        
+        // Apply filters on page load
+        updateFilters();
+        
+        // Handle browser back/forward
+        window.addEventListener('popstate', function(event) {
+            const urlParams = new URLSearchParams(window.location.search);
+            const dateParam = urlParams.get('date');
+            const departureParam = urlParams.get('departure');
+            const arrivalParam = urlParams.get('arrival');
+            
+            document.getElementById('datePicker').value = dateParam || '';
+            document.getElementById('departureFilter').value = departureParam || '';
+            document.getElementById('arrivalFilter').value = arrivalParam || '';
+            
+            updateFilters();
+        });
+    </script>
+</body>
+</html>
+
