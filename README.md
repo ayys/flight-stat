@@ -13,17 +13,13 @@ A Python CLI tool and library for fetching and displaying Buddha Air flight stat
 
 ## Installation
 
-Install using `uv`:
-
-```bash
-uv pip install -e .
-```
-
-Or install dependencies:
+Install dependencies using `uv`:
 
 ```bash
 uv sync
 ```
+
+This will install the package in editable mode along with all dependencies.
 
 ## Usage
 
