@@ -13,6 +13,7 @@ from rich.table import Table
 from flight_stat import (
     AIRPORTS,
     DB_PATH,
+    analyze_existing_routes,
     fetch_all_combinations_async,
     fetch_flight_status_async,
     format_airports_list,
@@ -65,6 +66,16 @@ def fetch_all_combinations(conn) -> None:
     console.print(
         "[bold green]Buddha Air - Fetch All Route Combinations[/bold green]\n"
     )
+
+    # Analyze existing routes to flag those with no flights
+    console.print("[cyan]Analyzing existing routes...[/cyan]")
+    flagged_count = analyze_existing_routes(conn)
+    if flagged_count > 0:
+        msg = (
+            f"[green]Flagged {flagged_count} routes as having no flights "
+            f"(will be skipped)[/green]\n"
+        )
+        console.print(msg)
 
     async def run_async():
         successful_routes, failed_routes, total_flights = await fetch_all_combinations_async(

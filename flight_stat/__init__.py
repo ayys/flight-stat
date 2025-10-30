@@ -5,6 +5,7 @@ Flight Status library for fetching and managing Buddha Air flight data.
 from flight_stat.lib import (
     AIRPORTS,
     DB_PATH,
+    analyze_existing_routes,
     fetch_all_combinations_async,
     fetch_flight_status_async,
     format_airports_list,
@@ -25,6 +26,7 @@ __all__ = [
     "init_database",
     "fetch_flight_status_async",
     "fetch_all_combinations_async",
+    "analyze_existing_routes",
     "get_nepal_date",
     "parse_xml",
     "store_flights",

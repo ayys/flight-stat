@@ -87,6 +87,17 @@ def init_database():
         )
     """)
 
+    # Table to track routes that have no flights (to avoid unnecessary API calls)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS no_flight_routes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            departure TEXT NOT NULL,
+            arrival TEXT NOT NULL,
+            last_checked TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(departure, arrival)
+        )
+    """)
+
     conn.commit()
     return conn
 
@@ -202,6 +213,96 @@ def get_nepal_date() -> date:
         Current date in Nepal timezone (Asia/Kathmandu)
     """
     return datetime.now(NEPAL_TZ).date()
+
+
+def is_route_flagged_no_flights(conn, departure: str, arrival: str) -> bool:
+    """Check if a route is flagged as having no flights.
+
+    Args:
+        conn: Database connection
+        departure: Departure airport code
+        arrival: Arrival airport code
+
+    Returns:
+        True if route is flagged as having no flights
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT id FROM no_flight_routes
+        WHERE departure = ? AND arrival = ?
+        LIMIT 1
+    """,
+        (departure, arrival),
+    )
+    return cursor.fetchone() is not None
+
+
+def flag_route_no_flights(conn, departure: str, arrival: str) -> None:
+    """Flag a route as having no flights.
+
+    Args:
+        conn: Database connection
+        departure: Departure airport code
+        arrival: Arrival airport code
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT OR REPLACE INTO no_flight_routes (departure, arrival, last_checked)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+    """,
+        (departure, arrival),
+    )
+    conn.commit()
+
+
+def analyze_existing_routes(conn) -> None:
+    """Analyze existing flight data to flag routes that have no flights.
+
+    This checks all unique routes in the database and flags those that
+    have never had any flights recorded.
+
+    Args:
+        conn: Database connection
+    """
+    cursor = conn.cursor()
+
+    # Get all unique routes from flights table
+    cursor.execute("""
+        SELECT DISTINCT departure, arrival
+        FROM flights
+    """)
+    routes_with_flights = set(cursor.fetchall())
+
+    # Get all airport combinations
+    airport_codes = get_airport_codes()
+    all_routes = [
+        (dep, arr)
+        for dep in airport_codes
+        for arr in airport_codes
+        if dep != arr
+    ]
+
+    # Flag routes that don't have any flights
+    # Convert departure/arrival to airport codes for matching
+    flagged_count = 0
+    for dep_code, arr_code in all_routes:
+        # Check if this route has any flights in the database
+        # We need to match airport names, not codes
+        dep_name = AIRPORTS.get(dep_code, "").upper().split("(")[0].strip()
+        arr_name = AIRPORTS.get(arr_code, "").upper().split("(")[0].strip()
+
+        has_flights = any(
+            dep_name in stored_dep.upper() and arr_name in stored_arr.upper()
+            for stored_dep, stored_arr in routes_with_flights
+        )
+
+        if not has_flights:
+            flag_route_no_flights(conn, dep_code, arr_code)
+            flagged_count += 1
+
+    return flagged_count
 
 
 def parse_xml(xml_content: str, flight_date: Optional[date] = None) -> List[Dict]:
@@ -338,11 +439,27 @@ async def fetch_all_combinations_async(
         if dep != arr
     ]
 
-    total_combinations = len(routes)
+    # Filter out routes that are flagged as having no flights
+    routes_to_fetch = [
+        (dep, arr) for dep, arr in routes
+        if not is_route_flagged_no_flights(conn, dep, arr)
+    ]
+    skipped_count = len(routes) - len(routes_to_fetch)
+
+    total_combinations = len(routes_to_fetch)
     if progress_callback and not use_tqdm:
-        progress_callback(
-            f"[cyan]Fetching flight status for {total_combinations} route combinations...[/cyan]\n"
-        )
+        if skipped_count > 0:
+            msg = (
+                f"[cyan]Fetching flight status for {total_combinations} route combinations "
+                f"({skipped_count} skipped routes with no flights)...[/cyan]\n"
+            )
+            progress_callback(msg)
+        else:
+            msg = (
+                f"[cyan]Fetching flight status for {total_combinations} "
+                f"route combinations...[/cyan]\n"
+            )
+            progress_callback(msg)
 
     total_flights = 0
     successful_routes = 0
@@ -364,6 +481,8 @@ async def fetch_all_combinations_async(
 
                     # Check if response is valid XML (not empty or error)
                     if not xml_content or xml_content.strip() == "":
+                        # Flag route as having no flights
+                        flag_route_no_flights(conn, departure, arrival)
                         if pbar:
                             pbar.set_postfix_str(f"{departure} → {arrival}: No data")
                         return (0, 0, False)
@@ -390,6 +509,8 @@ async def fetch_all_combinations_async(
                             pbar.set_postfix_str(f"{departure} → {arrival}: {status}")
                         return (inserted, skipped, True)
                     else:
+                        # Flag route as having no flights
+                        flag_route_no_flights(conn, departure, arrival)
                         if pbar:
                             pbar.set_postfix_str(f"{departure} → {arrival}: No flights")
                         return (0, 0, False)
@@ -407,7 +528,7 @@ async def fetch_all_combinations_async(
 
     # Create tasks for all routes
     tasks = [
-        fetch_and_store_route(dep, arr, pbar) for dep, arr in routes
+        fetch_and_store_route(dep, arr, pbar) for dep, arr in routes_to_fetch
     ]
 
     # Execute all tasks concurrently with progress tracking
@@ -432,7 +553,7 @@ async def fetch_all_combinations_async(
 
     # Process results
     for i, result in enumerate(results):
-        departure, arrival = routes[i]
+        departure, arrival = routes_to_fetch[i]
 
         if isinstance(result, Exception):
             failed_routes += 1
