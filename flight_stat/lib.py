@@ -301,7 +301,8 @@ def store_flights(conn, flights: List[Dict]) -> Tuple[int, int]:
             )
             inserted_count += 1
 
-    return flights
+    conn.commit()
+    return inserted_count, skipped_count
 
 
 async def fetch_all_combinations_async(
