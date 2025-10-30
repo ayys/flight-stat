@@ -13,6 +13,10 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import httpx
 import requests
+from zoneinfo import ZoneInfo
+
+# Nepal timezone (UTC+5:45)
+NEPAL_TZ = ZoneInfo("Asia/Kathmandu")
 
 # Database file path
 DB_PATH = Path.home() / "flight_status.db"
@@ -190,6 +194,15 @@ def format_airports_list() -> str:
     return ", ".join(items)
 
 
+def get_nepal_date() -> date:
+    """Get today's date in Nepal timezone.
+
+    Returns:
+        Current date in Nepal timezone (Asia/Kathmandu)
+    """
+    return datetime.now(NEPAL_TZ).date()
+
+
 def parse_xml(xml_content: str, flight_date: Optional[date] = None) -> List[Dict]:
     """Parse XML content and extract flight information.
 
@@ -201,7 +214,7 @@ def parse_xml(xml_content: str, flight_date: Optional[date] = None) -> List[Dict
         List of flight dictionaries
     """
     if flight_date is None:
-        flight_date = datetime.now().date()
+        flight_date = get_nepal_date()
 
     root = ET.fromstring(xml_content)
     flights = []
@@ -235,7 +248,7 @@ def store_flights(conn, flights: List[Dict]) -> Tuple[int, int]:
     skipped_count = 0
 
     for flight in flights:
-        flight_date = flight.get("flight_date", datetime.now().date())
+        flight_date = flight.get("flight_date", get_nepal_date())
         # Convert date to string to avoid deprecation warning in Python 3.12+
         flight_date_str = (
             flight_date.isoformat() if isinstance(flight_date, date) else str(flight_date)

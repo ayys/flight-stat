@@ -10,6 +10,7 @@ from flight_stat.lib import (
     AIRPORTS,
     get_flights_for_route,
     get_flights_from_db,
+    get_nepal_date,
     get_unique_flight_routes,
 )
 
@@ -45,7 +46,7 @@ def normalize_date(d):
     elif isinstance(d, str):
         return datetime.strptime(d, "%Y-%m-%d").date()
     else:
-        return date.today()
+        return get_nepal_date()
 
 
 def get_status_badge_class(flight_status: str) -> str:
@@ -96,16 +97,16 @@ def generate_index_page(conn, output_dir: Path, all_flights: List[Dict], env: En
         dates = sorted({normalize_date(f["flight_date"]) for f in all_flights}, reverse=True)
         min_date = min(dates)
         max_date = max(dates)
-        today = date.today()
+        today = get_nepal_date()
         default_date = today if today in dates else dates[0]
 
         # Get unique airports from flights
         unique_departures_raw = sorted({f["departure"] for f in all_flights})
         unique_arrivals_raw = sorted({f["arrival"] for f in all_flights})
     else:
-        min_date = date.today()
-        max_date = date.today()
-        default_date = date.today()
+        min_date = get_nepal_date()
+        max_date = get_nepal_date()
+        default_date = get_nepal_date()
         unique_departures_raw = []
         unique_arrivals_raw = []
 
@@ -158,7 +159,7 @@ def generate_flight_page(
     dates = sorted({normalize_date(f["flight_date"]) for f in all_flights}, reverse=True)
     min_date = min(dates)
     max_date = max(dates)
-    today = date.today()
+    today = get_nepal_date()
     default_date = today if today in dates else dates[0]
 
     # Prepare flights data for template
