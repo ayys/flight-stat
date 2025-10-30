@@ -27,6 +27,7 @@ classifiers = [
 
 dependencies = [
     "requests<3",
+    "httpx",
     "rich",
     "jinja2",
 ]

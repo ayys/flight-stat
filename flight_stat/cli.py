@@ -1,5 +1,6 @@
 """CLI interface for flight status management."""
 
+import asyncio
 import http.server
 import socketserver
 import sys
@@ -12,9 +13,9 @@ from rich.table import Table
 from flight_stat import (
     AIRPORTS,
     DB_PATH,
+    fetch_all_combinations_async,
     fetch_flight_status,
     format_airports_list,
-    get_airport_codes,
     get_flights_from_db,
     init_database,
     match_airport,
@@ -56,97 +57,26 @@ def display_flights(flights: List[Dict]) -> None:
 
 
 def fetch_all_combinations(conn) -> None:
-    """Fetch flight status for all airport combinations.
+    """Fetch flight status for all airport combinations (async implementation).
 
     Args:
         conn: Database connection
     """
-    import time  # Import here to avoid dependency if not needed
-
-    airport_codes = get_airport_codes()
-
-    if not airport_codes:
-        console.print("[yellow]No airports found.[/yellow]")
-        return
-
-    total_combinations = len(airport_codes) * (len(airport_codes) - 1)
     console.print(
-        f"[cyan]Fetching flight status for {total_combinations} route combinations...[/cyan]\n"
+        "[bold green]Buddha Air - Fetch All Route Combinations[/bold green]\n"
     )
 
-    total_flights = 0
-    successful_routes = 0
-    failed_routes = 0
-    route_count = 0
+    async def run_async():
+        successful_routes, failed_routes, total_flights = await fetch_all_combinations_async(
+            conn, max_concurrent=10, progress_callback=console.print
+        )
 
-    for departure in airport_codes:
-        for arrival in airport_codes:
-            if departure == arrival:
-                continue  # Skip same airport
+        console.print("\n[bold green]Summary:[/bold green]")
+        console.print(f"  [green]Successful routes: {successful_routes}[/green]")
+        console.print(f"  [yellow]Failed/Empty routes: {failed_routes}[/yellow]")
+        console.print(f"  [cyan]Total flights processed: {total_flights}[/cyan]")
 
-            route_count += 1
-            try:
-                status_msg = (
-                    f"[dim][{route_count}/{total_combinations}][/dim] {departure} → {arrival}: "
-                )
-                xml_content = fetch_flight_status(departure, arrival, verbose=False)
-
-                # Check if response is valid XML (not empty or error)
-                if not xml_content or xml_content.strip() == "":
-                    console.print(f"{status_msg}[yellow]No data[/yellow]")
-                    failed_routes += 1
-                    time.sleep(0.1)
-                    continue
-
-                # Check for JSON error responses
-                if xml_content.strip().startswith("{"):
-                    console.print(f"{status_msg}[yellow]API error[/yellow]")
-                    failed_routes += 1
-                    time.sleep(0.1)
-                    continue
-
-                # Parse XML
-                try:
-                    flights = parse_xml(xml_content)
-                except Exception:
-                    console.print(f"{status_msg}[yellow]Invalid XML[/yellow]")
-                    failed_routes += 1
-                    time.sleep(0.1)
-                    continue
-
-                if flights:
-                    # Store flights
-                    inserted, skipped = store_flights(conn, flights)
-                    total_flights += inserted
-                    successful_routes += 1
-                    if inserted > 0:
-                        status_parts = [f"{inserted} new"]
-                        if skipped > 0:
-                            status_parts.append(f"{skipped} skipped")
-                        console.print(f"{status_msg}[green]✓ {', '.join(status_parts)}[/green]")
-                    else:
-                        console.print(f"{status_msg}[dim]No new data ({skipped} skipped)[/dim]")
-                else:
-                    console.print(f"{status_msg}[dim]No flights[/dim]")
-                    failed_routes += 1
-
-                # Small delay to be respectful to the API
-                time.sleep(0.1)
-
-            except Exception as e:
-                msg = (
-                    f"[dim][{route_count}/{total_combinations}][/dim] "
-                    f"{departure} → {arrival}: [red]✗ Error: {e}[/red]"
-                )
-                console.print(msg)
-                failed_routes += 1
-                time.sleep(0.1)
-                continue
-
-    console.print("\n[bold green]Summary:[/bold green]")
-    console.print(f"  [green]Successful routes: {successful_routes}[/green]")
-    console.print(f"  [yellow]Failed/Empty routes: {failed_routes}[/yellow]")
-    console.print(f"  [cyan]Total flights processed: {total_flights}[/cyan]")
+    asyncio.run(run_async())
 
 
 def show_db_flights(

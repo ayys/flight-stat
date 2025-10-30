@@ -4,12 +4,14 @@ This module provides framework-agnostic functions for database operations,
 API interactions, and data processing. No Rich console dependencies.
 """
 
+import asyncio
 import sqlite3
 import xml.etree.ElementTree as ET
 from datetime import date, datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+import httpx
 import requests
 
 # Database file path
@@ -113,6 +115,34 @@ def fetch_flight_status(
     except requests.RequestException as e:
         if verbose and progress_callback:
             progress_callback(f"Error fetching flight status: {e}")
+        raise
+
+
+async def fetch_flight_status_async(
+    client: httpx.AsyncClient,
+    departure: str,
+    arrival: str,
+) -> str:
+    """Fetch flight status from the API asynchronously.
+
+    Args:
+        client: httpx async client
+        departure: Departure airport code
+        arrival: Arrival airport code
+
+    Returns:
+        XML content as string
+
+    Raises:
+        httpx.HTTPError: If the request fails
+    """
+    url = f"https://admin.buddhaair.com/api/flight-status/{departure}/{arrival}"
+
+    try:
+        response = await client.get(url, timeout=10.0)
+        response.raise_for_status()
+        return response.text
+    except httpx.HTTPError:
         raise
 
 
@@ -258,8 +288,132 @@ def store_flights(conn, flights: List[Dict]) -> Tuple[int, int]:
             )
             inserted_count += 1
 
-    conn.commit()
-    return inserted_count, skipped_count
+    return flights
+
+
+async def fetch_all_combinations_async(
+    conn,
+    max_concurrent: int = 10,
+    progress_callback: Optional[Callable[[str], None]] = None,
+) -> Tuple[int, int, int]:
+    """Fetch flight status for all airport combinations asynchronously.
+
+    Args:
+        conn: Database connection
+        max_concurrent: Maximum number of concurrent requests
+        progress_callback: Optional callback function for progress messages
+
+    Returns:
+        Tuple of (successful_routes, failed_routes, total_flights)
+    """
+    airport_codes = get_airport_codes()
+
+    if not airport_codes:
+        if progress_callback:
+            progress_callback("[yellow]No airports found.[/yellow]")
+        return (0, 0, 0)
+
+    # Generate all route combinations
+    routes = [
+        (dep, arr)
+        for dep in airport_codes
+        for arr in airport_codes
+        if dep != arr
+    ]
+
+    total_combinations = len(routes)
+    if progress_callback:
+        progress_callback(
+            f"[cyan]Fetching flight status for {total_combinations} route combinations...[/cyan]\n"
+        )
+
+    total_flights = 0
+    successful_routes = 0
+    failed_routes = 0
+
+    semaphore = asyncio.Semaphore(max_concurrent)
+
+    async def fetch_and_store_route(departure: str, arrival: str) -> Tuple[int, int, bool]:
+        """Fetch a single route and store results."""
+        async with semaphore:
+            try:
+                async with httpx.AsyncClient() as client:
+                    xml_content = await fetch_flight_status_async(client, departure, arrival)
+
+                    # Check if response is valid XML (not empty or error)
+                    if not xml_content or xml_content.strip() == "":
+                        return (0, 0, False)
+
+                    # Check for JSON error responses
+                    if xml_content.strip().startswith("{"):
+                        return (0, 0, False)
+
+                    # Parse XML
+                    try:
+                        flights = parse_xml(xml_content)
+                    except Exception:
+                        return (0, 0, False)
+
+                    if flights:
+                        # Store flights (database operations are synchronous)
+                        inserted, skipped = store_flights(conn, flights)
+                        return (inserted, skipped, True)
+                    else:
+                        return (0, 0, False)
+
+            except Exception:
+                return (0, 0, False)
+
+    # Create tasks for all routes
+    tasks = [
+        fetch_and_store_route(dep, arr) for dep, arr in routes
+    ]
+
+    # Execute all tasks concurrently
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Process results
+    for i, result in enumerate(results):
+        departure, arrival = routes[i]
+        route_num = i + 1
+
+        if isinstance(result, Exception):
+            failed_routes += 1
+            if progress_callback:
+                msg = (
+                    f"[dim][{route_num}/{total_combinations}][/dim] "
+                    f"{departure} → {arrival}: [red]✗ Error[/red]"
+                )
+                progress_callback(msg)
+        else:
+            inserted, skipped, success = result
+            if success:
+                successful_routes += 1
+                total_flights += inserted
+                if progress_callback:
+                    status_msg = (
+                        f"[dim][{route_num}/{total_combinations}][/dim] "
+                        f"{departure} → {arrival}: "
+                    )
+                    if inserted > 0:
+                        status_parts = [f"{inserted} new"]
+                        if skipped > 0:
+                            status_parts.append(f"{skipped} skipped")
+                        progress_callback(f"{status_msg}[green]✓ {', '.join(status_parts)}[/green]")
+                    else:
+                        progress_callback(
+                            f"{status_msg}[dim]No new data ({skipped} skipped)[/dim]"
+                        )
+            else:
+                failed_routes += 1
+                if progress_callback:
+                    status_msg = (
+                        f"[dim][{route_num}/{total_combinations}][/dim] "
+                        f"{departure} → {arrival}: "
+                    )
+                    progress_callback(f"{status_msg}[dim]No flights[/dim]")
+
+    return (successful_routes, failed_routes, total_flights)
 
 
 def get_flights_from_db(
