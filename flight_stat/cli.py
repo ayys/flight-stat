@@ -14,7 +14,7 @@ from flight_stat import (
     AIRPORTS,
     DB_PATH,
     fetch_all_combinations_async,
-    fetch_flight_status,
+    fetch_flight_status_async,
     format_airports_list,
     get_flights_from_db,
     init_database,
@@ -68,7 +68,7 @@ def fetch_all_combinations(conn) -> None:
 
     async def run_async():
         successful_routes, failed_routes, total_flights = await fetch_all_combinations_async(
-            conn, max_concurrent=10, progress_callback=console.print
+            conn, max_concurrent=20, progress_callback=console.print
         )
 
         console.print("\n[bold green]Summary:[/bold green]")
@@ -268,9 +268,13 @@ def main():
                     f"[cyan]Route: {dep_name} ({departure}) → {arr_name} ({arrival})[/cyan]\n"
                 )
 
-                xml_content = fetch_flight_status(
-                    departure, arrival, verbose=True, progress_callback=console.print
-                )
+                async def fetch_single_route():
+                    import httpx
+                    async with httpx.AsyncClient() as client:
+                        xml_content = await fetch_flight_status_async(client, departure, arrival)
+                        return xml_content
+
+                xml_content = asyncio.run(fetch_single_route())
                 flights = parse_xml(xml_content)
                 console.print(f"[green]Found {len(flights)} flight(s)[/green]\n")
 
