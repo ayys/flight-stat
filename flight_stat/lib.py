@@ -359,6 +359,9 @@ async def fetch_all_combinations_async(
                 async with httpx.AsyncClient() as client:
                     xml_content = await fetch_flight_status_async(client, departure, arrival)
 
+                    # Small delay to be respectful to the API
+                    await asyncio.sleep(0.05)
+
                     # Check if response is valid XML (not empty or error)
                     if not xml_content or xml_content.strip() == "":
                         if pbar:
