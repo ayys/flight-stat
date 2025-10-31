@@ -5,42 +5,203 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Buddha Air Flight Status</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        * {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
         body {
-            background-color: #f8f9fa;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 25%, #f093fb 50%, #4facfe 75%, #00f2fe 100%);
+            background-size: 400% 400%;
+            animation: gradientShift 15s ease infinite;
+            min-height: 100vh;
             padding-top: 20px;
+            padding-bottom: 40px;
+        }
+        @keyframes gradientShift {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        .container {
+            max-width: 1400px;
         }
         .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px 0;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            color: #1a1a1a;
+            padding: 40px 0;
             margin-bottom: 30px;
-            border-radius: 10px;
+            border-radius: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .header h1 {
+            font-weight: 700;
+            font-size: 2.5rem;
+            letter-spacing: -0.5px;
+            margin-bottom: 0.5rem;
+        }
+        .header p {
+            font-weight: 400;
+            font-size: 1.1rem;
+            color: #6c757d;
         }
         .flight-card {
-            transition: transform 0.2s;
-            margin-bottom: 15px;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
-        .flight-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        .flight-card .card {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            cursor: pointer;
+            border: none;
+            border-radius: 16px;
+            overflow: hidden;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07), 0 1px 3px rgba(0, 0, 0, 0.06);
         }
-        .badge-status {
-            font-size: 0.9em;
+        .flight-card .card:hover {
+            transform: translateY(-6px) scale(1.02);
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
         }
-        .route-link {
+        .flight-card a {
+            color: inherit;
             text-decoration: none;
+        }
+        .flight-card a:hover {
             color: inherit;
         }
-        .route-link:hover {
+        .flight-card .card-title {
+            font-weight: 600;
+            font-size: 1.25rem;
+            color: #1a1a1a;
+            margin-bottom: 0.5rem;
+        }
+        .flight-card h6 {
+            font-weight: 500;
             color: #667eea;
+            font-size: 0.95rem;
+        }
+        .badge-status {
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.4em 0.8em;
+            border-radius: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .badge-success {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .badge-warning {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+        .badge-danger {
+            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+        }
+        .badge-info {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
         }
         .date-selector {
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 30px;
+            border-radius: 20px;
+            margin-bottom: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .date-selector .form-label {
+            font-weight: 600;
+            color: #1a1a1a;
+            margin-bottom: 0.75rem;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .form-control {
+            border-radius: 12px;
+            border: 2px solid #e9ecef;
+            padding: 0.75rem 1rem;
+            font-weight: 400;
+            transition: all 0.2s;
+        }
+        .form-control:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.15);
+        }
+        .btn {
+            border-radius: 12px;
+            font-weight: 600;
+            padding: 0.6rem 1.5rem;
+            transition: all 0.2s;
+        }
+        .btn-outline-secondary {
+            border: 2px solid #e9ecef;
+        }
+        .btn-outline-secondary:hover {
+            background: #667eea;
+            border-color: #667eea;
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+        }
+        .card {
+            border-radius: 20px;
+            border: none;
+            overflow: hidden;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .card-title {
+            font-weight: 700;
+            font-size: 1.5rem;
+            color: #1a1a1a;
+            margin-bottom: 1.5rem;
+        }
+        .flight-details {
+            color: #495057;
+        }
+        .flight-details strong {
+            color: #1a1a1a;
+            font-weight: 600;
+        }
+        .flight-details .text-primary {
+            color: #667eea !important;
+            font-weight: 600;
+        }
+        .dropdown-menu {
+            border-radius: 12px;
+            border: 2px solid #e9ecef;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            padding: 0.5rem;
+        }
+        .dropdown-item {
+            border-radius: 8px;
+            margin-bottom: 0.25rem;
+            transition: all 0.2s;
+        }
+        .dropdown-item:hover {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            transform: translateX(4px);
+        }
+        .dropdown-item.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .alert {
+            border-radius: 16px;
+            border: none;
+            font-weight: 500;
+        }
+        .alert-info {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
         }
         .dropdown-filter {
             position: relative;
@@ -58,17 +219,6 @@
         }
         .dropdown-menu.show {
             display: block;
-        }
-        .dropdown-item {
-            cursor: pointer;
-            padding: 8px 12px;
-        }
-        .dropdown-item:hover {
-            background-color: #f8f9fa;
-        }
-        .dropdown-item.active {
-            background-color: #667eea;
-            color: white;
         }
         .filter-input-group {
             position: relative;
@@ -160,31 +310,48 @@
             <div class="card-body">
                 <h2 class="card-title mb-4">All Flights</h2>
                 
-                <div class="table-responsive">
-                    <table class="table table-hover">
-                        <thead class="table-light">
-                            <tr>
-                                <th>Flight No.</th>
-                                <th>Route</th>
-                                <th>Scheduled Time</th>
-                                <th>Revised Time</th>
-                                <th>Status</th>
-                                <th>Remarks</th>
-                            </tr>
-                        </thead>
-                        <tbody id="flightTableBody">
-                            {% for flight in flights %}
-                            <tr class="flight-row" data-date="{{ flight.flight_date_str }}" data-departure="{{ flight.departure }}" data-arrival="{{ flight.arrival }}">
-                                <td><a href="{{ flight.filename }}" class="route-link">{{ flight.flight_no }}</a></td>
-                                <td><a href="{{ flight.filename }}" class="route-link">{{ flight.route_display }}</a></td>
-                                <td>{{ flight.flight_time or '' }}</td>
-                                <td>{{ flight.revised_time or '' }}</td>
-                                <td>{% if flight.flight_status %}<span class="badge {{ flight.status_badge_class }} badge-status">{{ flight.flight_status }}</span>{% endif %}</td>
-                                <td>{{ flight.flight_remarks or '' }}</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
+                <div class="row" id="flightCardsContainer">
+                    {% for flight in flights %}
+                    <div class="col-md-6 col-lg-4 mb-3 flight-card" data-date="{{ flight.flight_date_str }}" data-departure="{{ flight.departure }}" data-arrival="{{ flight.arrival }}">
+                        <a href="{{ flight.filename }}" class="text-decoration-none">
+                            <div class="card h-100 shadow-sm">
+                                <div class="card-body">
+                                    <div class="d-flex justify-content-between align-items-start mb-2">
+                                        <h5 class="card-title mb-0">{{ flight.flight_no }}</h5>
+                                        {% if flight.flight_status %}
+                                        <span class="badge {{ flight.status_badge_class }} badge-status">{{ flight.flight_status }}</span>
+                                        {% endif %}
+                                    </div>
+                                    <h6 class="text-muted mb-3">{{ flight.route_display }}</h6>
+                                    <div class="flight-details">
+                                        {% if flight.flight_time %}
+                                        <div class="mb-2">
+                                            <small class="text-muted d-block">Scheduled</small>
+                                            <strong>{{ flight.flight_time }}</strong>
+                                        </div>
+                                        {% endif %}
+                                        {% if flight.revised_time %}
+                                        <div class="mb-2">
+                                            <small class="text-muted d-block">Revised</small>
+                                            <strong class="text-primary">{{ flight.revised_time }}</strong>
+                                        </div>
+                                        {% endif %}
+                                        {% if flight.flight_remarks %}
+                                        <div class="mb-2">
+                                            <small class="text-muted d-block">Remarks</small>
+                                            <span>{{ flight.flight_remarks }}</span>
+                                        </div>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                        </a>
+                    </div>
+                    {% endfor %}
+                </div>
+                
+                <div id="noDataMessage" class="alert alert-info text-center" style="display:none;">
+                    No flights available for selected filters
                 </div>
                 
                 <div class="mt-4 text-muted">
@@ -207,40 +374,40 @@
             const selectedDeparture = document.getElementById('departureFilter').value.trim().toUpperCase();
             const selectedArrival = document.getElementById('arrivalFilter').value.trim().toUpperCase();
             
-            const rows = document.querySelectorAll('.flight-row');
+            const cards = document.querySelectorAll('.flight-card');
             let hasData = false;
             
-            rows.forEach(row => {
-                const rowDate = row.getAttribute('data-date');
-                const rowDeparture = row.getAttribute('data-departure').toUpperCase();
-                const rowArrival = row.getAttribute('data-arrival').toUpperCase();
+            cards.forEach(card => {
+                const cardDate = card.getAttribute('data-date');
+                const cardDeparture = card.getAttribute('data-departure').toUpperCase();
+                const cardArrival = card.getAttribute('data-arrival').toUpperCase();
                 
                 let match = true;
                 
                 // Date filter
-                if (selectedDate && rowDate !== selectedDate) {
+                if (selectedDate && cardDate !== selectedDate) {
                     match = false;
                 }
                 
                 // Departure filter - supports partial matching
                 if (selectedDeparture) {
-                    if (!rowDeparture.includes(selectedDeparture)) {
+                    if (!cardDeparture.includes(selectedDeparture)) {
                         match = false;
                     }
                 }
                 
                 // Arrival filter - supports partial matching
                 if (selectedArrival) {
-                    if (!rowArrival.includes(selectedArrival)) {
+                    if (!cardArrival.includes(selectedArrival)) {
                         match = false;
                     }
                 }
                 
                 if (match) {
-                    row.style.display = '';
+                    card.style.display = '';
                     hasData = true;
                 } else {
-                    row.style.display = 'none';
+                    card.style.display = 'none';
                 }
             });
             
@@ -265,19 +432,11 @@
             dateDisplay.textContent = displayText;
             
             // Show message if no data for selected filters
-            const tbody = document.getElementById('flightTableBody');
-            let noDataRow = document.getElementById('noDataRow');
+            const noDataMessage = document.getElementById('noDataMessage');
             if (!hasData) {
-                if (!noDataRow) {
-                    noDataRow = document.createElement('tr');
-                    noDataRow.id = 'noDataRow';
-                    noDataRow.innerHTML = '<td colspan="6" class="text-center text-muted">No flights available for selected filters</td>';
-                    tbody.appendChild(noDataRow);
-                }
+                noDataMessage.style.display = 'block';
             } else {
-                if (noDataRow) {
-                    noDataRow.remove();
-                }
+                noDataMessage.style.display = 'none';
             }
         }
         
