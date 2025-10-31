@@ -1,18 +1,19 @@
 """CLI interface for flight status management."""
 
 import asyncio
+import functools
 import http.server
 import socketserver
-import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import click
+import httpx
 from rich.console import Console
 from rich.table import Table
 
 from flight_stat import (
     AIRPORTS,
-    DB_PATH,
     analyze_existing_routes,
     fetch_all_combinations_async,
     fetch_flight_status_async,
@@ -28,13 +29,8 @@ console = Console()
 
 
 def display_flights(flights: List[Dict]) -> None:
-    """Display flights in a nice table format.
-
-    Args:
-        flights: List of flight dictionaries to display
-    """
+    """Display flights in a nice table format."""
     table = Table(title="Flight Status", show_header=True, header_style="bold magenta")
-
     table.add_column("Flight No.", style="cyan")
     table.add_column("Departure", style="green")
     table.add_column("Arrival", style="yellow")
@@ -53,76 +49,86 @@ def display_flights(flights: List[Dict]) -> None:
             flight["flight_status"] or "",
             flight["flight_remarks"] or "",
         )
-
     console.print(table)
 
 
-def fetch_all_combinations(conn) -> None:
-    """Fetch flight status for all airport combinations (async implementation).
-
-    Args:
-        conn: Database connection
-    """
-    console.print(
-        "[bold green]Buddha Air - Fetch All Route Combinations[/bold green]\n"
-    )
-
-    # Analyze existing routes to flag those with no flights
-    console.print("[cyan]Analyzing existing routes...[/cyan]")
-    flagged_count = analyze_existing_routes(conn)
-    if flagged_count > 0:
-        msg = (
-            f"[green]Flagged {flagged_count} routes as having no flights "
-            f"(will be skipped)[/green]\n"
-        )
-        console.print(msg)
-
-    async def run_async():
-        successful_routes, failed_routes, total_flights = await fetch_all_combinations_async(
-            conn, max_concurrent=20, progress_callback=console.print
-        )
-
-        console.print("\n[bold green]Summary:[/bold green]")
-        console.print(f"  [green]Successful routes: {successful_routes}[/green]")
-        console.print(f"  [yellow]Failed/Empty routes: {failed_routes}[/yellow]")
-        console.print(f"  [cyan]Total flights processed: {total_flights}[/cyan]")
-
-    asyncio.run(run_async())
+def print_airport_error(input_str: str, matches: Optional[List], airport_type: str) -> None:
+    """Print airport matching error."""
+    console.print(f"[red]Error: Invalid or ambiguous {airport_type} airport: {input_str}[/red]")
+    if matches:
+        matches_str = ", ".join([f"{name} ({code})" for code, name in matches])
+        console.print(f"[yellow]Ambiguous matches: {matches_str}[/yellow]")
+    console.print(f"[cyan]Available airports: {format_airports_list()}[/cyan]")
 
 
-def show_db_flights(
-    conn, departure_code: Optional[str] = None, arrival_code: Optional[str] = None
-) -> None:
+def async_cmd(f):
+    """Decorator to run async commands."""
+
+    @functools.wraps(f)
+    def wrapper(*args, **kwargs):
+        return asyncio.run(f(*args, **kwargs))
+
+    return wrapper
+
+
+@click.group()
+@click.version_option()
+def cli():
+    """Flight status management CLI."""
+    pass
+
+
+@cli.command()
+@click.argument("to_airport", required=False)
+@click.argument("from_airport", required=False)
+@click.option("--all", "show_all", is_flag=True, help="Show all flights")
+@async_cmd
+async def show(to_airport: Optional[str], from_airport: Optional[str], show_all: bool):
     """Show flights from database.
 
-    Args:
-        conn: Database connection
-        departure_code: Optional departure airport code
-        arrival_code: Optional arrival airport code
+    Examples:
+        flight-stat show
+        flight-stat show --all
+        flight-stat show BHR KTM
     """
-    flights = get_flights_from_db(conn, departure_code, arrival_code)
+    pool = await init_database()
+
+    departure = None
+    arrival = None
+
+    if show_all or (not to_airport and not from_airport):
+        # show all flights
+        pass
+    elif to_airport and from_airport:
+        # show TO FROM (note: TO before FROM as requested)
+        arrival, arr_matches = match_airport(to_airport)
+        if arrival is None:
+            print_airport_error(to_airport, arr_matches, "arrival")
+            raise click.Abort()
+
+        departure, dep_matches = match_airport(from_airport)
+        if departure is None:
+            print_airport_error(from_airport, dep_matches, "departure")
+            raise click.Abort()
+    else:
+        console.print("[red]Error: Both TO and FROM airports must be provided, or use --all[/red]")
+        raise click.Abort()
+
+    flights = await get_flights_from_db(pool, departure, arrival)
 
     if not flights:
         console.print("[yellow]No flights found in database.[/yellow]")
-        if departure_code or arrival_code:
-            console.print(
-                "[dim]Try fetching flights first with: flight-stat update <FROM> <TO>[/dim]"
-            )
-        else:
-            console.print(
-                "[dim]Try fetching flights first with: "
-                "flight-stat update <FROM> <TO> or --all[/dim]"
-            )
+        console.print("[dim]Try fetching flights first with: flight-stat update <FROM> <TO>[/dim]")
         return
 
-    if departure_code or arrival_code:
+    if departure or arrival:
         route_str = ""
-        if departure_code:
-            route_str += f"{AIRPORTS.get(departure_code, departure_code)} ({departure_code})"
-        if departure_code and arrival_code:
+        if departure:
+            route_str += f"{AIRPORTS.get(departure, departure)} ({departure})"
+        if departure and arrival:
             route_str += " → "
-        if arrival_code:
-            route_str += f"{AIRPORTS.get(arrival_code, arrival_code)} ({arrival_code})"
+        if arrival:
+            route_str += f"{AIRPORTS.get(arrival, arrival)} ({arrival})"
         console.print("[bold green]Flights from Database[/bold green]")
         console.print(f"[cyan]Route: {route_str}[/cyan]\n")
     else:
@@ -133,292 +139,190 @@ def show_db_flights(
     display_flights(flights)
 
 
-def show_usage():
-    """Show usage information."""
-    console.print("[red]Error: Invalid usage[/red]\n")
-    console.print("[yellow]Usage:[/yellow]")
-    console.print("  [cyan]flight-stat show[/cyan]")
-    console.print("    Show all flights from database\n")
-    console.print("  [cyan]flight-stat show --all[/cyan]")
-    console.print("    Show all flights from database\n")
-    console.print("  [cyan]flight-stat show <TO> <FROM>[/cyan]")
-    console.print("    Show flights for a specific route")
-    console.print("    Accepts airport codes, names, or partial matches\n")
-    console.print("  [cyan]flight-stat update --all[/cyan]")
-    console.print("    Fetch flight status for all route combinations\n")
-    console.print("  [cyan]flight-stat update <FROM> <TO>[/cyan]")
-    console.print("    Fetch flight status for a specific route")
-    console.print("    Accepts airport codes, names, or partial matches\n")
-    console.print("  [cyan]flight-stat generate [--output-dir OUTPUT_DIR][/cyan]")
-    console.print("    Generate static HTML pages from database\n")
-    console.print("  [cyan]flight-stat serve [--output-dir OUTPUT_DIR] [--port PORT][/cyan]")
-    console.print("    Serve static HTML pages via local web server")
-    console.print("    Default port: 8000\n")
-    console.print(f"[cyan]Available airports: {format_airports_list()}[/cyan]")
-    console.print("\n[dim]Examples:[/dim]")
-    console.print("[dim]  flight-stat show[/dim]")
-    console.print("[dim]  flight-stat show --all[/dim]")
-    console.print("[dim]  flight-stat show BHR KTM  (TO before FROM)[/dim]")
-    console.print("[dim]  flight-stat update KTM BHR[/dim]")
-    console.print("[dim]  flight-stat update --all[/dim]")
-    console.print("[dim]  flight-stat generate[/dim]")
-    console.print("[dim]  flight-stat serve[/dim]")
-    console.print("[dim]  flight-stat serve --port 8080[/dim]")
+@cli.command()
+@click.option("--all", "update_all_flag", is_flag=True, help="Fetch all route combinations")
+@click.argument("from_airport", required=False)
+@click.argument("to_airport", required=False)
+@async_cmd
+async def update(update_all_flag: bool, from_airport: Optional[str], to_airport: Optional[str]):
+    """Update/fetch flight status.
+
+    Examples:
+        flight-stat update --all
+        flight-stat update KTM BHR
+    """
+    if update_all_flag:
+        # Fetch all routes
+        console.print("[bold green]Buddha Air - Fetch All Route Combinations[/bold green]\n")
+
+        console.print("[cyan]Step 1: Initializing database connection...[/cyan]")
+        pool = await init_database()
+        console.print("[green]✓ Database connected[/green]\n")
+
+        console.print("[cyan]Step 2: Analyzing existing routes in database...[/cyan]")
+        unfetched_count = await analyze_existing_routes(pool, progress_callback=console.print)
+        if unfetched_count > 0:
+            console.print(f"[cyan]✓ Found {unfetched_count} routes not yet in database (will be checked)[/cyan]\n")
+        else:
+            console.print("[green]✓ All possible routes have been checked at least once[/green]\n")
+
+        console.print("[cyan]Step 3: Fetching flight status for all route combinations...[/cyan]")
+        successful_routes, failed_routes, total_flights = await fetch_all_combinations_async(pool, max_concurrent=20, progress_callback=console.print)
+
+        console.print("\n[bold green]Summary:[/bold green]")
+        console.print(f"  [green]Successful routes: {successful_routes}[/green]")
+        console.print(f"  [yellow]Failed/Empty routes: {failed_routes}[/yellow]")
+        console.print(f"  [cyan]Total flights processed: {total_flights}[/cyan]")
+        return
+
+    # Fetch specific route
+    if not from_airport or not to_airport:
+        console.print("[red]Error: Both FROM and TO airports must be provided, or use --all[/red]")
+        raise click.Abort()
+
+    console.print("[bold green]Buddha Air Flight Status Fetcher[/bold green]\n")
+
+    console.print("[cyan]Step 1: Initializing database connection...[/cyan]")
+    pool = await init_database()
+    console.print("[green]✓ Database connected[/green]\n")
+
+    console.print("[cyan]Step 2: Matching airport codes...[/cyan]")
+    console.print(f"  [dim]Departure input: {from_airport}[/dim]")
+    departure, dep_matches = match_airport(from_airport)
+    if departure is None:
+        print_airport_error(from_airport, dep_matches, "departure")
+        raise click.Abort()
+    console.print(f"  [green]✓ Departure: {AIRPORTS[departure]} ({departure})[/green]")
+
+    console.print(f"  [dim]Arrival input: {to_airport}[/dim]")
+    arrival, arr_matches = match_airport(to_airport)
+    if arrival is None:
+        print_airport_error(to_airport, arr_matches, "arrival")
+        raise click.Abort()
+    console.print(f"  [green]✓ Arrival: {AIRPORTS[arrival]} ({arrival})[/green]\n")
+
+    if departure == arrival:
+        airport_name = AIRPORTS[departure]
+        console.print(f"[red]Error: Departure and arrival cannot be the same: {airport_name} ({departure})[/red]")
+        raise click.Abort()
+
+    dep_name = AIRPORTS[departure]
+    arr_name = AIRPORTS[arrival]
+    console.print("[cyan]Step 3: Fetching flight status...[/cyan]")
+    console.print(f"  [dim]Route: {dep_name} ({departure}) → {arr_name} ({arrival})[/dim]")
+
+    async with httpx.AsyncClient() as client:
+        xml_content = await fetch_flight_status_async(client, departure, arrival)
+    console.print("[green]✓ API response received[/green]\n")
+
+    console.print("[cyan]Step 4: Parsing XML response...[/cyan]")
+    flights = parse_xml(xml_content)
+    console.print(f"[green]✓ Parsed {len(flights)} flight(s)[/green]\n")
+
+    if flights:
+        display_flights(flights)
+        console.print("\n[cyan]Step 5: Storing flights in database...[/cyan]")
+        inserted, skipped = await store_flights(pool, flights, progress_callback=console.print)
+        console.print("[green]✓ Database operation completed[/green]")
+
+        status_parts = []
+        if inserted > 0:
+            status_parts.append(f"{inserted} new")
+        if skipped > 0:
+            status_parts.append(f"{skipped} skipped")
+
+        if inserted > 0:
+            console.print(f"\n[bold green]✓ {', '.join(status_parts)}[/bold green]")
+        else:
+            console.print(f"\n[yellow]No new data ({skipped} skipped)[/yellow]")
+    else:
+        console.print("[yellow]No flights found in response[/yellow]")
+
+
+@cli.command()
+@click.option(
+    "--output-dir",
+    default="output",
+    type=click.Path(file_okay=False, dir_okay=True),
+    help="Output directory for generated HTML pages",
+)
+@async_cmd
+async def generate(output_dir: str):
+    """Generate static HTML pages from database."""
+    from flight_stat.generate import generate_pages
+
+    pool = await init_database()
+    console.print(f"[green]Generating static pages in {output_dir}/...[/green]\n")
+    await generate_pages(pool, output_dir)
+    console.print("\n[bold green]✓ Static pages generated successfully![/bold green]")
+    console.print(f"[cyan]Open {output_dir}/index.html in your browser[/cyan]")
+
+
+@cli.command()
+@click.option(
+    "--output-dir",
+    default="output",
+    type=click.Path(file_okay=False, dir_okay=True, exists=True),
+    help="Directory containing generated HTML pages",
+)
+@click.option(
+    "--port",
+    default=8000,
+    type=int,
+    help="Port number to serve on",
+)
+def serve(output_dir: str, port: int):
+    """Serve static HTML pages via local web server."""
+    output_path = Path(output_dir).resolve()
+
+    if not (output_path / "index.html").exists():
+        console.print(f"[red]Error: index.html not found in '{output_dir}'[/red]")
+        console.print("[yellow]Hint: Run 'flight-stat generate' first[/yellow]")
+        raise click.Abort()
+
+    class CustomHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(output_path), **kwargs)
+
+        def log_message(self, format, *args):
+            pass
+
+    def find_free_port(start_port):
+        for test_port in range(start_port, start_port + 100):
+            try:
+                with socketserver.TCPServer(("", test_port), CustomHTTPRequestHandler):
+                    return test_port
+            except OSError:
+                continue
+        return None
+
+    actual_port = find_free_port(port)
+    if actual_port is None:
+        console.print(f"[red]Error: Could not find an available port starting from {port}[/red]")
+        raise click.Abort()
+
+    if actual_port != port:
+        console.print(f"[yellow]Port {port} is in use, using port {actual_port} instead[/yellow]")
+
+    httpd = socketserver.TCPServer(("", actual_port), CustomHTTPRequestHandler)
+    try:
+        console.print(f"[bold green]Serving static pages from {output_path}[/bold green]")
+        console.print(f"[cyan]Server running at: http://localhost:{actual_port}[/cyan]")
+        console.print("[cyan]Press Ctrl+C to stop[/cyan]\n")
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Shutting down server...[/yellow]")
+        httpd.shutdown()
+        console.print("[green]Server stopped[/green]")
 
 
 def main():
-    """Main function."""
-    if len(sys.argv) < 2:
-        # No arguments - show usage
-        show_usage()
-        sys.exit(1)
-
-    command = sys.argv[1]
-
-    if command == "show":
-        # Show flights from database
-        conn = init_database()
-
-        try:
-            departure = None
-            arrival = None
-
-            if len(sys.argv) == 3 and sys.argv[2] == "--all":
-                # show --all (show all flights)
-                pass
-            elif len(sys.argv) == 4:
-                # show TO FROM (note: TO before FROM as requested)
-                arrival_input = sys.argv[2]  # TO comes first
-                departure_input = sys.argv[3]  # FROM comes second
-
-                # Match airport codes/names
-                arrival, arr_matches = match_airport(arrival_input)
-                if arrival is None:
-                    console.print(
-                        f"[red]Error: Invalid or ambiguous arrival airport: {arrival_input}[/red]"
-                    )
-                    if arr_matches:
-                        matches_str = ", ".join([f"{name} ({code})" for code, name in arr_matches])
-                        console.print(f"[yellow]Ambiguous matches: {matches_str}[/yellow]")
-                    console.print(f"[cyan]Available airports: {format_airports_list()}[/cyan]")
-                    sys.exit(1)
-
-                departure, dep_matches = match_airport(departure_input)
-                if departure is None:
-                    console.print(
-                        f"[red]Error: Invalid or ambiguous departure airport: "
-                        f"{departure_input}[/red]"
-                    )
-                    if dep_matches:
-                        matches_str = ", ".join([f"{name} ({code})" for code, name in dep_matches])
-                        console.print(f"[yellow]Ambiguous matches: {matches_str}[/yellow]")
-                    console.print(f"[cyan]Available airports: {format_airports_list()}[/cyan]")
-                    sys.exit(1)
-
-            show_db_flights(conn, departure_code=departure, arrival_code=arrival)
-        except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
-            raise
-        finally:
-            conn.close()
-
-    elif command == "update":
-        # Update/fetch flights
-        conn = init_database()
-        console.print(f"[green]Database initialized: {DB_PATH}[/green]\n")
-
-        try:
-            if len(sys.argv) == 3 and sys.argv[2] == "--all":
-                # update --all (fetch all combinations)
-                console.print(
-                    "[bold green]Buddha Air - Fetch All Route Combinations[/bold green]\n"
-                )
-                fetch_all_combinations(conn)
-            elif len(sys.argv) == 4:
-                # update FROM TO (fetch specific route)
-                departure_input = sys.argv[2]
-                arrival_input = sys.argv[3]
-
-                # Match airport codes/names
-                departure, dep_matches = match_airport(departure_input)
-                if departure is None:
-                    console.print(
-                        f"[red]Error: Invalid or ambiguous departure airport: "
-                        f"{departure_input}[/red]"
-                    )
-                    if dep_matches:
-                        matches_str = ", ".join([f"{name} ({code})" for code, name in dep_matches])
-                        console.print(f"[yellow]Ambiguous matches: {matches_str}[/yellow]")
-                    console.print(f"[cyan]Available airports: {format_airports_list()}[/cyan]")
-                    sys.exit(1)
-
-                arrival, arr_matches = match_airport(arrival_input)
-                if arrival is None:
-                    console.print(
-                        f"[red]Error: Invalid or ambiguous arrival airport: {arrival_input}[/red]"
-                    )
-                    if arr_matches:
-                        matches_str = ", ".join([f"{name} ({code})" for code, name in arr_matches])
-                        console.print(f"[yellow]Ambiguous matches: {matches_str}[/yellow]")
-                    console.print(f"[cyan]Available airports: {format_airports_list()}[/cyan]")
-                    sys.exit(1)
-
-                if departure == arrival:
-                    airport_name = AIRPORTS[departure]
-                    console.print(
-                        f"[red]Error: Departure and arrival cannot be the same: "
-                        f"{airport_name} ({departure})[/red]"
-                    )
-                    sys.exit(1)
-
-                # Fetch flight status for specified route
-                console.print("[bold green]Buddha Air Flight Status Fetcher[/bold green]")
-                dep_name = AIRPORTS[departure]
-                arr_name = AIRPORTS[arrival]
-                console.print(
-                    f"[cyan]Route: {dep_name} ({departure}) → {arr_name} ({arrival})[/cyan]\n"
-                )
-
-                async def fetch_single_route():
-                    import httpx
-                    async with httpx.AsyncClient() as client:
-                        xml_content = await fetch_flight_status_async(client, departure, arrival)
-                        return xml_content
-
-                xml_content = asyncio.run(fetch_single_route())
-                flights = parse_xml(xml_content)
-                console.print(f"[green]Found {len(flights)} flight(s)[/green]\n")
-
-                display_flights(flights)
-                inserted, skipped = store_flights(conn, flights)
-
-                status_parts = []
-                if inserted > 0:
-                    status_parts.append(f"{inserted} new")
-                if skipped > 0:
-                    status_parts.append(f"{skipped} skipped")
-
-                if inserted > 0:
-                    console.print(f"\n[green]✓ {', '.join(status_parts)}[/green]")
-                else:
-                    console.print(f"\n[yellow]No new data ({skipped} skipped)[/yellow]")
-            else:
-                console.print("[red]Error: 'update' requires arguments[/red]")
-                console.print("[yellow]Usage:[/yellow]")
-                console.print("  [cyan]flight-stat update --all[/cyan]")
-                console.print("  [cyan]flight-stat update <FROM> <TO>[/cyan]")
-                sys.exit(1)
-        except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
-            raise
-        finally:
-            conn.close()
-
-    elif command == "generate":
-        # Generate static HTML pages
-        from flight_stat.generate import generate_pages
-
-        output_dir = "output"
-        if len(sys.argv) >= 4 and sys.argv[2] == "--output-dir":
-            output_dir = sys.argv[3]
-
-        try:
-            conn = init_database()
-            console.print(f"[green]Generating static pages in {output_dir}/...[/green]\n")
-            generate_pages(conn, output_dir)
-            console.print("\n[bold green]✓ Static pages generated successfully![/bold green]")
-            console.print(f"[cyan]Open {output_dir}/index.html in your browser[/cyan]")
-        except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
-            raise
-        finally:
-            conn.close()
-
-    elif command == "serve":
-        # Serve static HTML pages
-        output_dir = "output"
-        port = 8000
-
-        # Parse arguments
-        i = 2
-        while i < len(sys.argv):
-            if sys.argv[i] == "--output-dir" and i + 1 < len(sys.argv):
-                output_dir = sys.argv[i + 1]
-                i += 2
-            elif sys.argv[i] == "--port" and i + 1 < len(sys.argv):
-                try:
-                    port = int(sys.argv[i + 1])
-                    i += 2
-                except ValueError:
-                    console.print(f"[red]Error: Invalid port number: {sys.argv[i + 1]}[/red]")
-                    sys.exit(1)
-            elif sys.argv[i] == "--port" and i + 1 >= len(sys.argv):
-                console.print("[red]Error: --port requires a port number[/red]")
-                sys.exit(1)
-            else:
-                i += 1
-
-        output_path = Path(output_dir).resolve()
-        if not output_path.exists():
-            console.print(f"[red]Error: Output directory '{output_dir}' does not exist[/red]")
-            console.print(
-                "[yellow]Hint: Run 'flight-stat generate' first to generate the pages[/yellow]"
-            )
-            sys.exit(1)
-
-        if not (output_path / "index.html").exists():
-            console.print(f"[red]Error: index.html not found in '{output_dir}'[/red]")
-            console.print(
-                "[yellow]Hint: Run 'flight-stat generate' first to generate the pages[/yellow]"
-            )
-            sys.exit(1)
-
-        # Custom handler that serves from the specified directory
-        class CustomHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, directory=str(output_path), **kwargs)
-
-            def log_message(self, format, *args):
-                # Suppress default logging
-                pass
-
-        # Find available port if specified port is in use
-        def find_free_port(start_port):
-            for test_port in range(start_port, start_port + 100):
-                try:
-                    with socketserver.TCPServer(("", test_port), CustomHTTPRequestHandler):
-                        return test_port
-                except OSError:
-                    continue
-            return None
-
-        actual_port = find_free_port(port)
-        if actual_port is None:
-            console.print(
-                f"[red]Error: Could not find an available port starting from {port}[/red]"
-            )
-            sys.exit(1)
-
-        if actual_port != port:
-            console.print(
-                f"[yellow]Port {port} is in use, using port {actual_port} instead[/yellow]"
-            )
-
-        httpd = socketserver.TCPServer(("", actual_port), CustomHTTPRequestHandler)
-
-        try:
-            console.print(f"[bold green]Serving static pages from {output_path}[/bold green]")
-            console.print(f"[cyan]Server running at: http://localhost:{actual_port}[/cyan]")
-            console.print("[cyan]Press Ctrl+C to stop[/cyan]\n")
-            httpd.serve_forever()
-        except KeyboardInterrupt:
-            console.print("\n[yellow]Shutting down server...[/yellow]")
-            httpd.shutdown()
-            console.print("[green]Server stopped[/green]")
-
-    else:
-        show_usage()
-        sys.exit(1)
+    """Main entry point."""
+    try:
+        cli()
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 """Static HTML page generator for flight status data using Jinja2 templates."""
 
+import contextlib
 from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, List
@@ -23,11 +24,7 @@ def get_airport_code_from_name(airport_name: str) -> str:
 
     for code, name in AIRPORTS.items():
         name_base = name.upper().split("(")[0].strip()
-        if (
-            name_base == airport_name_base
-            or name_base in airport_name_base
-            or airport_name_base in name_base
-        ):
+        if name_base == airport_name_base or name_base in airport_name_base or airport_name_base in name_base:
             return code
 
     # If not found, try to extract from the name itself
@@ -81,15 +78,11 @@ def prepare_flight_data(flight: Dict) -> Dict:
         "flight_remarks": flight.get("flight_remarks", "") or None,
         "flight_date_str": flight_date_obj.strftime("%Y-%m-%d"),
         "status_badge_class": get_status_badge_class(flight.get("flight_status", "")),
-        "filename": (
-            f"flight_{sanitize_filename(dep_code)}_"
-            f"{sanitize_filename(arr_code)}_"
-            f"{sanitize_filename(flight['flight_no'])}.html"
-        ),
+        "filename": (f"flight_{sanitize_filename(dep_code)}_{sanitize_filename(arr_code)}_{sanitize_filename(flight['flight_no'])}.html"),
     }
 
 
-def generate_index_page(conn, output_dir: Path, all_flights: List[Dict], env: Environment) -> None:
+async def generate_index_page(conn, output_dir: Path, all_flights: List[Dict], env: Environment) -> None:
     """Generate the index page with all flights, filterable by date and route."""
 
     # Get date range from all flights
@@ -111,12 +104,8 @@ def generate_index_page(conn, output_dir: Path, all_flights: List[Dict], env: En
         unique_arrivals_raw = []
 
     # Prepare airport data for template
-    unique_departures = [
-        {"name": dep, "code": get_airport_code_from_name(dep)} for dep in unique_departures_raw
-    ]
-    unique_arrivals = [
-        {"name": arr, "code": get_airport_code_from_name(arr)} for arr in unique_arrivals_raw
-    ]
+    unique_departures = [{"name": dep, "code": get_airport_code_from_name(dep)} for dep in unique_departures_raw]
+    unique_arrivals = [{"name": arr, "code": get_airport_code_from_name(arr)} for arr in unique_arrivals_raw]
 
     # Prepare flights data for template
     flights_data = [prepare_flight_data(flight) for flight in all_flights]
@@ -144,13 +133,31 @@ def generate_index_page(conn, output_dir: Path, all_flights: List[Dict], env: En
     index_path.write_text(html_content, encoding="utf-8")
 
 
-def generate_flight_page(
-    conn, output_dir: Path, departure: str, arrival: str, flight_no: str, env: Environment
-) -> None:
-    """Generate an individual flight page with historical data."""
+async def generate_flight_page(conn_or_flights, output_dir: Path, departure: str, arrival: str, flight_no: str, env: Environment) -> None:
+    """Generate an individual flight page with historical data.
 
-    # Get all flights for this route + flight number
-    all_flights = get_flights_for_route(conn, departure, arrival, flight_no)
+    Args:
+        conn_or_flights: Either a database connection (for backward compatibility)
+                        or a list of flight dictionaries (optimized path)
+        output_dir: Output directory for HTML files
+        departure: Departure airport name
+        arrival: Arrival airport name
+        flight_no: Flight number
+        env: Jinja2 environment
+    """
+    # Accept either a connection (legacy) or pre-fetched flights list (optimized)
+    if isinstance(conn_or_flights, list):
+        # Filter flights for this route + flight number
+        all_flights = [
+            f
+            for f in conn_or_flights
+            if f.get("departure", "").upper() == departure.upper()
+            and f.get("arrival", "").upper() == arrival.upper()
+            and f.get("flight_no", "") == flight_no
+        ]
+    else:
+        # Legacy path: fetch from database
+        all_flights = await get_flights_for_route(conn_or_flights, departure, arrival, flight_no)
 
     if not all_flights:
         return
@@ -168,13 +175,8 @@ def generate_flight_page(
         flight_date_obj = normalize_date(flight["flight_date"])
         fetched_at_str = ""
         if flight.get("fetched_at"):
-            try:
-                if isinstance(flight["fetched_at"], str):
-                    fetched_at_str = flight["fetched_at"][:16]  # Truncate timestamp
-                else:
-                    fetched_at_str = str(flight["fetched_at"])[:16]
-            except Exception:
-                pass  # Ignore formatting errors
+            with contextlib.suppress(Exception):
+                fetched_at_str = flight["fetched_at"][:16] if isinstance(flight["fetched_at"], str) else str(flight["fetched_at"])[:16]
 
         flights_data.append(
             {
@@ -202,16 +204,12 @@ def generate_flight_page(
         flights=flights_data,
     )
 
-    filename = (
-        f"flight_{sanitize_filename(dep_code)}_"
-        f"{sanitize_filename(arr_code)}_"
-        f"{sanitize_filename(flight_no)}.html"
-    )
+    filename = f"flight_{sanitize_filename(dep_code)}_{sanitize_filename(arr_code)}_{sanitize_filename(flight_no)}.html"
     flight_path = output_dir / filename
     flight_path.write_text(html_content, encoding="utf-8")
 
 
-def generate_pages(conn, output_dir: str = "output") -> None:
+async def generate_pages(conn, output_dir: str = "output") -> None:
     """Generate static HTML pages from database.
 
     Args:
@@ -223,21 +221,18 @@ def generate_pages(conn, output_dir: str = "output") -> None:
 
     # Setup Jinja2 environment
     template_dir = Path(__file__).parent / "templates"
-    env = Environment(
-        loader=FileSystemLoader(str(template_dir)), autoescape=select_autoescape(["html", "xml"])
-    )
+    env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=select_autoescape(["html", "xml"]))
 
     # Get all flights (no date filter for index page - it will filter client-side)
-    all_flights = get_flights_from_db(conn)
+    all_flights = await get_flights_from_db(conn)
 
     # Generate index page
-    generate_index_page(conn, output_path, all_flights, env)
+    await generate_index_page(conn, output_path, all_flights, env)
 
     # Get unique routes for generating individual flight pages
-    routes = get_unique_flight_routes(conn)
+    routes = await get_unique_flight_routes(conn)
 
     # Generate individual flight pages
+    # Pass all_flights directly to avoid DB calls in the loop
     for route in routes:
-        generate_flight_page(
-            conn, output_path, route["departure"], route["arrival"], route["flight_no"], env
-        )
+        await generate_flight_page(all_flights, output_path, route["departure"], route["arrival"], route["flight_no"], env)
